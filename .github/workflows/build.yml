@@ -1,0 +1,76 @@
+name: auto build engine
+
+on: 
+  release:
+    types: [published]
+  schedule:
+    - cron: "0 16 * * *"
+  push:
+    branches: 
+      - master
+  watch:
+    types: [started]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install build depedencies
+        run: |
+          docker rmi `docker images -q`
+          sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/apt/sources.list.d
+          sudo -E apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google* dotnet* powershell openjdk* mysql* php*
+          sudo -E apt-get update
+          sudo -E apt-get -y install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs gcc-multilib g++-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler antlr3 gperf
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get clean
+
+      - name: Build firmware
+        run: |
+          git clone https://github.com/coolsnowwolf/lede --depth 1
+          pushd lede
+          sed -i 's/#src-git/src-git/g' ./feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          wget --no-check-certificate -O .config https://raw.githubusercontent.com/ActiveIce/oye-0001/master/config 
+          yes "" | make oldconfig
+          make download -j$(nproc)
+          find dl -size -1024c -exec rm -f {} \;
+          make -j$(nproc) || make -j1 V=s
+          popd
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@master
+        with:
+          name: firmware
+          path: ./lede/bin/targets/
+
+  push:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@master
+    
+    - name: Clean
+      run: |
+        rm -r ipq40xx
+    
+    - name: Download firmware
+      uses: actions/download-artifact@master
+      with:
+        name: firmware
+        path: ./
+    
+    - name: Commit
+      run: |
+        git config --global user.email "actions@github.com"
+        git config --global user.name "GitHub Actions"
+        git checkout --orphan new_branch
+        git add -A
+        git commit -am "update new file"
+        git branch -D master
+        git branch -m master
+        git push origin master --force
